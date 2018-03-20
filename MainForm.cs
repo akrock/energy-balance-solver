@@ -111,6 +111,23 @@ namespace EnergyBalanceSolver
             }
         }
 
+        public class KeyDictionary
+        {
+            public Dictionary<int, KeyDictionary> Values { get; } = new Dictionary<int, KeyDictionary>();
+
+            public void SetSolution(int[] s)
+            {
+                var dict = this;
+                foreach(var i in s)
+                {
+                    if (!dict.Values.TryGetValue(i, out var kd))
+                        dict.Values[i] = kd = new KeyDictionary();
+
+                    dict = kd;
+                }
+            }
+        }
+
         private class SumVector
         {
             public List<TextBox> Boxes = new List<TextBox>();
@@ -119,6 +136,9 @@ namespace EnergyBalanceSolver
             public int? Sum = null;
             
             public List<int[]> PossibleSolutions = new List<int[]>();
+
+
+            public KeyDictionary SolutionDictionary = new KeyDictionary();
 
             public void AddSolutions(List<TextBox> flat, List<int> values, List<SumVector> otherVectors)
             {
@@ -146,7 +166,14 @@ namespace EnergyBalanceSolver
                 });
     
                 PossibleSolutions = total;
-            
+            }
+
+            public void SetDictionary()
+            {
+                foreach(var s in PossibleSolutions)
+                {
+                    SolutionDictionary.SetSolution(s);
+                }
             }
 
             static IEnumerable<List<int>> GetCombination(List<int> temp, List<int> list, int length)
@@ -214,7 +241,9 @@ namespace EnergyBalanceSolver
             
             ReduceSolutionsBySingles(vectors);
             ReduceSolutionsByIntersections(vectors);
-            
+
+            Parallel.ForEach(vectors, (v) => v.SetDictionary());
+
             //Sort them by least solutions to most.
             BruteForce(vectors);
             
@@ -238,43 +267,77 @@ namespace EnergyBalanceSolver
 
             var bag = new ConcurrentBag<int?[]>();
             var outerCts = new CancellationTokenSource();
-            var blockingTasks = new BlockingCollection<Task>(40);
+            var blockingTasks = new BlockingCollection<Task>(20);
 
-            vectors = vectors.OrderBy(x => x.PossibleSolutions.Count).ToList();
+            //vectors = vectors.OrderBy(x => x.PossibleSolutions.Count).ToList();
 
-            Task.Run(() =>
+            //Task.Run(() =>
+            //{
+            //    foreach (var vp in Permutations(vectors.ToArray()))
+            //    {
+            //        var processString = $"Processing: {string.Join(",", vp.Select(x => vectors.IndexOf(x)))}";
+            //        Console.WriteLine(processString);
+            //        if (outerCts.IsCancellationRequested)
+            //            break;
+
+            //        var pTask = Task.Run(() => AttemptSolution(AvailableValues.ToList(), vp.ToList(), outerCts.Token).ContinueWith(t =>
+            //        {
+            //            Console.WriteLine($"Finished {processString}");
+            //            if (t.Result != null)
+            //            {
+            //                bag.Add(t.Result);
+            //                outerCts.Cancel();
+            //            }
+            //        }));
+
+            //        blockingTasks.Add(pTask);
+
+            ////var pTask = Task.Run(() => AttemptSolution(AvailableValues.ToList(), vp.ToList(), outerCts.Token).ContinueWith(t =>
+            ////        {
+            ////            Console.WriteLine($"Finished {processString}");
+            ////            if (t.Result != null)
+            ////            {
+            ////                bag.Add(t.Result);
+            ////                outerCts.Cancel();
+            ////            }
+            ////        }));
+
+            ////        blockingTasks.Add(pTask);
+            //    }
+
+            //    blockingTasks.CompleteAdding();
+            //});
+
+            //try
+            //{
+            //    foreach (var bt in blockingTasks.GetConsumingEnumerable())
+            //        bt.Wait();
+            //}
+            //catch (Exception ex) { }
+
+            var consumedPositions = new HashSet<int>();
+            var processingOrder = new List<SumVector>();
+
+            while (processingOrder.Count < vectors.Count)
             {
-                foreach (var vp in Permutations(vectors.ToArray()))
-                {
-                    var processString = $"Processing: {string.Join(",", vp.Select(x => vectors.IndexOf(x)))}";
-                    Console.WriteLine(processString);
-                    if (outerCts.IsCancellationRequested)
-                        break;
+                //remaining to add.
+                var toAdd = vectors.Where(v => !processingOrder.Contains(v)).OrderByDescending(x => consumedPositions.Count(z => x.BoxIndexes.Contains(z)))
+                    .ThenBy(x => x.BoxIndexes[0]).FirstOrDefault();
 
-                    var pTask = Task.Run(() => AttemptSolution(AvailableValues.ToList(), vp.ToList(), outerCts.Token).ContinueWith(t =>
-                    {
-                        Console.WriteLine($"Finished {processString}");
-                        if (t.Result != null)
-                        {
-                            bag.Add(t.Result);
-                            outerCts.Cancel();
-                        }
-                    }));
+                foreach (var bi in toAdd.BoxIndexes)
+                    consumedPositions.Add(bi);
 
-                    blockingTasks.Add(pTask);
-                }
-
-                blockingTasks.CompleteAdding();
-            });
-
-            try
-            {
-                foreach (var bt in blockingTasks.GetConsumingEnumerable())
-                    bt.Wait();
+                processingOrder.Add(toAdd);
             }
-            catch (Exception ex) { }
+            
 
-            var solution = bag.FirstOrDefault();
+            vectors = vectors.OrderBy(x => x.BoxIndexes[0]).ToList();
+
+            var t = Task.Run(() => AttemptSolution(AvailableValues.ToList(), processingOrder, outerCts.Token));
+             
+
+            var solution = t.Result;
+            //var solution = bag.FirstOrDefault();
 
             if (solution != null)
             {
@@ -314,31 +377,58 @@ namespace EnergyBalanceSolver
             var bag = new ConcurrentBag<int?[]>();
             var innerCts = CancellationTokenSource.CreateLinkedTokenSource(outerToken);
 
-            //var blockingTasks = new BlockingCollection<Task>(2500);
+            var blockingTasks = new BlockingCollection<Task>(500);
             var tasks = new List<Task>();
+
+            foreach(var s in v.SolutionDictionary.Values)
+            {
+
+                //bag.Add(await AttemptSolveOneSolutionGroup(new int?[100], valuesLeft, v, s, vectors.Skip(1).ToList(), innerCts.Token));
+
+                tasks.Add(Task.Run(() => AttemptSolveOneSolutionGroup(new int?[100], valuesLeft, v, s, vectors.Skip(1).ToList(), innerCts.Token).ContinueWith(t =>
+                {
+                    if (t.Result != null)
+                    {
+                        bag.Add(t.Result);
+                        innerCts.Cancel();
+                    }
+                }), innerCts.Token));
+            }
+
             //Task.Run(() =>
             //{
-                foreach(var s in v.PossibleSolutions)
-                {
-                    if (innerCts.IsCancellationRequested)
-                        break;
+            //    foreach (var s in v.SolutionDictionary.Values)
+            //    {
+            //        if (innerCts.IsCancellationRequested)
+            //            break;
 
-                    //blockingTasks.Add(SolveFirstLevel(s, valuesLeft, v, vectors.Skip(1).ToList(), innerCts.Token).ContinueWith(t =>
-                    tasks.Add(SolveFirstLevel(s, valuesLeft, v, vectors.Skip(1).ToList(), innerCts.Token).ContinueWith(t =>
-                    {
-                        if (t.Result != null)
-                        {
-                            bag.Add(t.Result);
-                            innerCts.Cancel();
-                        }
-                    }));
-                }
+            //        blockingTasks.Add(AttemptSolveOneSolutionGroup(new int?[100], valuesLeft, v, s, vectors.Skip(1).ToList(), innerCts.Token).ContinueWith(t =>
+            //        {
+            //            if (t.Result != null)
+            //            {
+            //                bag.Add(t.Result);
+            //                innerCts.Cancel();
+            //            }
+            //        }));
+            //        //tasks.Add(SolveFirstLevel(s, valuesLeft, v, vectors.Skip(1).ToList(), innerCts.Token).ContinueWith(t =>
+            //        //{
+            //        //    if (t.Result != null)
+            //        //    {
+            //        //        bag.Add(t.Result);
+            //        //        innerCts.Cancel();
+            //        //    }
+            //        //}));
+            //    }
 
-                //blockingTasks.CompleteAdding();
+            //    blockingTasks.CompleteAdding();
             //});
-            
+
             try
             {
+
+                //foreach (var bt in blockingTasks.GetConsumingEnumerable())
+                //    bt.Wait();
+
                 //await Task.WhenAll(blockingTasks.GetConsumingEnumerable().ToArray());
                 await Task.WhenAll(tasks.ToArray());
             }
@@ -349,110 +439,308 @@ namespace EnergyBalanceSolver
 
 
 
-        private async Task<int?[]> SolveFirstLevel(int[]s, List<int> valuesLeft, SumVector v,  List<SumVector> vectors, CancellationToken token)
+        //private async Task<int?[]> SolveFirstLevel(int[]s, List<int> valuesLeft, SumVector v,  List<SumVector> vectors, CancellationToken token)
+        //{
+        //    if (token.IsCancellationRequested)
+        //        return null;
+
+        //    var tempSetValues = new int?[100];
+        //    var tempValuesLeft = valuesLeft.ToList();
+            
+        //    bool solutionWorks = true;
+        //    for (int i = 0; i < v.Boxes.Count; i++)
+        //    {
+        //        var val = s[i];
+        //        var matrixIdx = v.BoxIndexes[i];
+        //        var setValue = tempSetValues[matrixIdx];
+        //        if (setValue.HasValue)
+        //        {
+        //            if (val != setValue)
+        //            {
+        //                solutionWorks = false;
+        //                break;
+        //            }
+        //        }
+        //        else
+        //        {
+        //            var toSet = val;
+        //            if (tempValuesLeft.Contains(toSet))
+        //            {
+        //                tempValuesLeft.Remove(toSet);
+        //                tempSetValues[matrixIdx] = toSet;
+        //            }
+        //            else
+        //            {
+        //                solutionWorks = false;
+        //                break;
+        //            }
+        //        }
+        //    }
+
+        //    if (solutionWorks)
+        //    {
+        //        var rslt = await AttemptSolve(tempSetValues.ToArray(), tempValuesLeft.ToList(), vectors.FirstOrDefault(), vectors.Skip(1).ToList(), token);
+        //        if (rslt != null)
+        //            return rslt;
+        //    }
+
+        //    return null;
+        //}
+        
+        private bool EvaluateSolutionGroup(int?[] setValues, List<int> valuesLeft, int matrixIndex, int value)
+        {
+            var setValue = setValues[matrixIndex];
+            if (setValue.HasValue)
+            {
+                if (value != setValue)
+                {
+                    return false;
+                }
+            }
+            else
+            {
+                if (valuesLeft.Contains(value))
+                {
+                    valuesLeft.Remove(value);
+                    setValues[matrixIndex] = value;
+                }
+                else
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        //private Task<int?[]> EvalNextGroups(int?[] setValues, List<int> valuesLeft, SumVector v, int pos, List<int[]> values, List<SumVector> vectorsLeft, CancellationToken token)
+        //{
+        //    if (token.IsCancellationRequested)
+        //        return Task.FromResult<int?[]>(null);
+
+        //    //var evalStack = new Stack<IEnumerable<IGrouping<>>>
+
+        //    var group = values.GroupBy(x => x[pos]);
+        //    foreach(var k in group)
+        //    {
+
+        //    }
+
+        //    for (; pos < v.Boxes.Count; pos++)
+        //    {
+        //        if (token.IsCancellationRequested)
+        //            return Task.FromResult<int?[]>(null);
+
+        //        var group = values.GroupBy(x => x[pos]);
+        //        foreach (var k in group)
+        //        {
+        //            var tempSetValues = setValues.ToArray();
+        //            var tempValuesLeft = valuesLeft.ToList();
+
+        //            var works = EvaluateSolutionGroup(tempSetValues, tempValuesLeft, v.BoxIndexes[pos], k.Key);
+
+        //            if (works)
+        //            {
+        //                var rslt = EvalNextGroups(tempSetValues, tempValuesLeft, v, pos + 1, k.ToList(), vectorsLeft, token);
+        //                if (rslt != null)
+        //                    return rslt;
+        //            }
+        //        }
+        //    }
+
+
+
+
+        //    return Task.FromResult<int?[]>(null);
+        //}
+
+        private class EvalContext
+        {
+            public int?[] SetValues { get; set; }
+            public List<int> ValuesLeft { get; set; }
+            public KeyDictionary KeyGroup { get; set; }
+            public int Position { get; set; }
+        }
+
+        private async Task<int?[]> EvalNextGroups(EvalContext context, SumVector v, List<SumVector> vectorsLeft, CancellationToken token)
         {
             if (token.IsCancellationRequested)
                 return null;
 
-            var tempSetValues = new int?[100];
-            var tempValuesLeft = valuesLeft.ToList();
-            
-            bool solutionWorks = true;
-            for (int i = 0; i < v.Boxes.Count; i++)
+           
+            var stack = new Stack<EvalContext>();
+            stack.Push(context);
+
+            while(stack.Any())
             {
-                var val = s[i];
-                var matrixIdx = v.BoxIndexes[i];
-                var setValue = tempSetValues[matrixIdx];
-                if (setValue.HasValue)
+                var ctx = stack.Pop();
+
+                if (ctx.Position >= v.Boxes.Count)
                 {
-                    if (val != setValue)
+                    var rslt = await AttemptSolve(ctx.SetValues, ctx.ValuesLeft, vectorsLeft.FirstOrDefault(), vectorsLeft.Skip(1).ToList(), token);
+                    if (rslt != null)
+                        return rslt;
+
+                    continue;
+                }
+
+                var boxIdx = v.BoxIndexes[ctx.Position];
+                var setVal = ctx.SetValues[boxIdx];
+
+                //Short-cut if we have values set.
+                if (setVal.HasValue)
+                {
+                    if(ctx.KeyGroup.Values.TryGetValue(setVal.Value, out var next))
                     {
-                        solutionWorks = false;
-                        break;
+                        stack.Push(new EvalContext
+                        {
+                            //Can we get away with not duplicating these here??
+                            SetValues = ctx.SetValues.ToArray(),
+                            ValuesLeft = ctx.ValuesLeft.ToList(),
+                            KeyGroup = next,
+                            Position = ctx.Position + 1
+                        });
                     }
+
+                    continue;
                 }
                 else
                 {
-                    var toSet = val;
-                    if (tempValuesLeft.Contains(toSet))
+                    foreach (var k in ctx.KeyGroup.Values)
                     {
-                        tempValuesLeft.Remove(toSet);
-                        tempSetValues[matrixIdx] = toSet;
-                    }
-                    else
-                    {
-                        solutionWorks = false;
-                        break;
+                        var tempSetValues = ctx.SetValues.ToArray();
+                        var tempValuesLeft = ctx.ValuesLeft.ToList();
+
+                        var works = EvaluateSolutionGroup(tempSetValues, tempValuesLeft, v.BoxIndexes[ctx.Position], k.Key);
+
+                        if (works)
+                        {
+                            stack.Push(new EvalContext
+                            {
+                                SetValues = tempSetValues,
+                                ValuesLeft = tempValuesLeft,
+                                KeyGroup = k.Value,
+                                Position = ctx.Position + 1
+                            });
+                        }
                     }
                 }
             }
 
-            if (solutionWorks)
-            {
-                var rslt = await AttemptSolve(tempSetValues.ToArray(), tempValuesLeft.ToList(), vectors.FirstOrDefault(), vectors.Skip(1).ToList(), token);
-                if (rslt != null)
-                    return rslt;
-            }
+
+            //foreach (var k in keyGroup.Values)
+            //{
+            //    var tempSetValues = setValues.ToArray();
+            //    var tempValuesLeft = valuesLeft.ToList();
+
+            //    var works = EvaluateSolutionGroup(tempSetValues, tempValuesLeft, v.BoxIndexes[pos], k.Key);
+
+            //    if (works)
+            //    {
+            //        var rslt = await EvalNextGroups(tempSetValues, tempValuesLeft, v, pos + 1, k.Value, vectorsLeft, token);
+            //        if (rslt != null)
+            //            return rslt;
+            //    }
+            //}
 
             return null;
         }
 
-
-        private Task<int?[]> AttemptSolve(int?[] setValues, List<int> valuesLeft, SumVector v, List<SumVector> vectorsLeft, CancellationToken token)
+        private async Task<int?[]> AttemptSolveOneSolutionGroup(int?[] setValues, List<int> valuesLeft, SumVector v, KeyValuePair<int, KeyDictionary> k, List<SumVector> vectorsLeft, CancellationToken token)
         {
             if (token.IsCancellationRequested)
-                return Task.FromResult<int?[]>(null);
+                return null;
+
+            var primarySetValues = setValues.ToArray();
+            var primaryValuesLeft = valuesLeft.ToList();
+
+            bool solutionWorks = EvaluateSolutionGroup(primarySetValues, primaryValuesLeft, v.BoxIndexes[0], k.Key);
+            if (solutionWorks)
+            {
+                var rslt = await EvalNextGroups(new EvalContext
+                {
+                    SetValues = primarySetValues,
+                    ValuesLeft = primaryValuesLeft,
+                    KeyGroup = k.Value,
+                    Position = 1
+                }, v, vectorsLeft, token);
+
+                if (rslt != null)
+                    return rslt;
+
+                Console.WriteLine($"[{v.Sum}]: Eliminated sg {k.Key} - {vectorsLeft.Count} vectors left.");
+            }
+            
+            return null;
+        }
+
+        private async Task<int?[]> AttemptSolve(int?[] setValues, List<int> valuesLeft, SumVector v, List<SumVector> vectorsLeft, CancellationToken token)
+        {
+            if (token.IsCancellationRequested)
+                return null;
 
             if (v == null)
-                return Task.FromResult(setValues);
-
-            foreach (var s in v.PossibleSolutions)
+                return setValues;
+            
+            foreach(var k in v.SolutionDictionary.Values)
             {
-                if (token.IsCancellationRequested)
-                    return Task.FromResult<int?[]>(null);
+                var rslt = await AttemptSolveOneSolutionGroup(setValues, valuesLeft, v, k, vectorsLeft, token);
+                if (rslt != null)
+                    return rslt;
 
-                var tempSetValues = setValues.ToArray();
-                var tempValuesLeft = valuesLeft.ToList();
 
-                bool solutionWorks = true;
-                for (int i = 0; i < v.Boxes.Count; i++)
-                {
-                    var val = s[i];
-                    var matrixIdx = v.BoxIndexes[i];
-                    var setValue = tempSetValues[matrixIdx];
-                    if (setValue.HasValue)
-                    {
-                        if (val != setValue)
-                        {
-                            solutionWorks = false;
-                            break;
-                        }
-                    }
-                    else
-                    {
-                        var toSet = val;
-                        if (tempValuesLeft.Contains(toSet))
-                        {
-                            tempValuesLeft.Remove(toSet);
-                            tempSetValues[matrixIdx] = toSet;
-                        }
-                        else
-                        {
-                            solutionWorks = false;
-                            break;
-                        }
-                    }
-                }
-
-                if (solutionWorks)
-                {
-                    var rslt = AttemptSolve(tempSetValues.ToArray(), tempValuesLeft.ToList(), vectorsLeft.FirstOrDefault(), vectorsLeft.Skip(1).ToList(), token);
-                    if (rslt != null)
-                        return rslt;
-                }
             }
 
-            return Task.FromResult<int?[]>(null);
+
+
+
+            //foreach (var s in v.PossibleSolutions)
+            //{
+            //    if (token.IsCancellationRequested)
+            //        return Task.FromResult<int?[]>(null);
+
+            //    var tempSetValues = setValues.ToArray();
+            //    var tempValuesLeft = valuesLeft.ToList();
+
+            //    bool solutionWorks = true;
+            //    for (int i = 0; i < v.Boxes.Count; i++)
+            //    {
+            //        var val = s[i];
+            //        var matrixIdx = v.BoxIndexes[i];
+            //        var setValue = tempSetValues[matrixIdx];
+            //        if (setValue.HasValue)
+            //        {
+            //            if (val != setValue)
+            //            {
+            //                solutionWorks = false;
+            //                break;
+            //            }
+            //        }
+            //        else
+            //        {
+            //            var toSet = val;
+            //            if (tempValuesLeft.Contains(toSet))
+            //            {
+            //                tempValuesLeft.Remove(toSet);
+            //                tempSetValues[matrixIdx] = toSet;
+            //            }
+            //            else
+            //            {
+            //                solutionWorks = false;
+            //                break;
+            //            }
+            //        }
+            //    }
+
+            //    if (solutionWorks)
+            //    {
+            //        var rslt = AttemptSolve(tempSetValues.ToArray(), tempValuesLeft.ToList(), vectorsLeft.FirstOrDefault(), vectorsLeft.Skip(1).ToList(), token);
+            //        if (rslt != null)
+            //            return rslt;
+            //    }
+            //}
+
+            return null;
         }
 
         
