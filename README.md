@@ -1,6 +1,8 @@
 # energy-balance-solver
 An windows form to solve the puzzles from the Energy Balance game.
 
+ [Releases](https://github.com/akrock/energy-balance-solver/releases)
+
 A compiled version is available in the releases link above, otherwise compile from source for yourself using Visual Studio Community 2017.
 
 ## Requirements To Run
@@ -23,8 +25,7 @@ And a real-time demo of the solving!
 
 ![Test_Solution](https://raw.githubusercontent.com/akrock/energy-balance-solver/master/test-solve.gif)
 
-## License
-
+## MIT License
 Copyright 2018 
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
