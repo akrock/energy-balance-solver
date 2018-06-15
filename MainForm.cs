@@ -249,33 +249,39 @@ namespace EnergyBalanceSolver
                 }
 
                 ProgressBar.UpdateLabel("Finding all possible solutions...");
-                await Task.Run(() => Parallel.ForEach(vectors, (v) => v.AddSolutions(flatBoxes, AvailableValues, vectors.Where(x => x != v).ToList())));
+                await Task.Run(() => Parallel.ForEach(vectors, (v) => v.AddSolutions(flatBoxes, AvailableValues, vectors.Where(x => x != v).ToList())), userCts.Token);
 
-                ProgressBar.UpdateLabel("Reduce possible soltuions....");
-                await Task.Run(() =>
+                var boxes = vectors.First().BoxIndexes.Count;
+                //Skip trying to reduce on squares, it usually doesn't work.
+                if (!vectors.All(v => v.BoxIndexes.Count == boxes))
                 {
-                    int totalSolutions = 0;
-                    int afterReduce = 0;
-                    do
+                    ProgressBar.UpdateLabel("Reduce possible soltuions....");
+                    await Task.Run(() =>
                     {
-                        totalSolutions = vectors.Sum(x => x.PossibleSolutions.Count);
+                        int totalSolutions = 0;
+                        int afterReduce = 0;
+                        do
+                        {
+                            totalSolutions = vectors.Sum(x => x.PossibleSolutions.Count);
 
-                        ReduceSolutionsBySingles(vectors);
-                        ReduceSolutionsByIntersections(vectors);
+                            ReduceSolutionsBySingles(vectors);
+                            ReduceSolutionsByIntersections(vectors);
 
-                        afterReduce = vectors.Sum(x => x.PossibleSolutions.Count);
-                        Console.WriteLine($"TotalSolutions: {totalSolutions} -> {afterReduce}");
-                    } while (totalSolutions != afterReduce);
-                });
+                            afterReduce = vectors.Sum(x => x.PossibleSolutions.Count);
+                            Console.WriteLine($"TotalSolutions: {totalSolutions} -> {afterReduce}");
+                        } while (totalSolutions != afterReduce);
+                    }, userCts.Token);
+                }
 
                 ProgressBar.UpdateLabel("Preparing to solve.....");
-                await Task.Run(() => Parallel.ForEach(vectors, (v) => v.SetDictionary()));
+                await Task.Run(() => Parallel.ForEach(vectors, (v) => v.SetDictionary()), userCts.Token);
 
                 //Sort them by least solutions to most.
                 await BruteForce(vectors, userCts.Token);
             }
             catch (Exception ex)
             {
+                userCts.Cancel();
                 MessageBox.Show("An error happened, please make sure your inputs are valid numbers!.");
             }
             finally
@@ -357,7 +363,7 @@ namespace EnergyBalanceSolver
         {
             ProgressBar?.UpdateLabel(text);
         }
-
+        
         private async Task<int?[]> AttemptSolution(List<int> valuesLeft, List<SumVector> vectors, CancellationToken outerToken)
         {
             if (outerToken.IsCancellationRequested)
@@ -371,26 +377,26 @@ namespace EnergyBalanceSolver
             var blockingTasks = new BlockingCollection<Task>(500);
             var tasks = new List<Task>();
 
-            UpdateLabel($"Attempting {v.SolutionDictionary.Values.Count} solutions.");
-            int eliminated = 0;
+            UpdateLabel($"Attempting solutions.");
+            var totalSolutions = 0;
 
             foreach(var s in v.SolutionDictionary.Values.OrderBy(x => x.Value.Solutions))
             {
+                totalSolutions += s.Value.Solutions;
+
                 tasks.Add(Task.Run(() =>
                 {
-                    var result = AttemptSolveOneSolutionGroup(new int?[100], valuesLeft, v, s, vectors.Skip(1).ToList(), innerCts.Token);
+                    var result = AttemptSolveOneSolutionGroup(null, valuesLeft, v, s, vectors.Skip(1).ToList(), innerCts.Token);
                     if (result != null)
                     {
                         bag.Add(result);
                         innerCts.Cancel();
                     }
-                    else
-                    {
-                        var solutionsProcessed = Interlocked.Increment(ref eliminated);
-                        UpdateLabel($"Eliminated {solutionsProcessed} / {v.SolutionDictionary.Values.Count} solutions.");
-                    }
                 }, innerCts.Token));
             }
+
+            ProgressBar.TotalSolutions = totalSolutions;
+            UpdateLabel($"Attempting {totalSolutions} solutions.");
 
             try
             {
@@ -433,6 +439,7 @@ namespace EnergyBalanceSolver
             public List<int> ValuesLeft { get; set; }
             public KeyDictionary KeyGroup { get; set; }
             public int Position { get; set; }
+            public bool TopLevel { get; internal set; }
         }
 
         private int?[] EvalNextGroups(EvalContext context, SumVector v, List<SumVector> vectorsLeft, CancellationToken token)
@@ -440,12 +447,16 @@ namespace EnergyBalanceSolver
             if (token.IsCancellationRequested)
                 return null;
 
+            var report = context.TopLevel;
            
             var stack = new Stack<EvalContext>();
             stack.Push(context);
 
             while(stack.Any())
             {
+                if (token.IsCancellationRequested)
+                    return null;
+
                 var ctx = stack.Pop();
 
                 if (ctx.Position >= v.Boxes.Count)
@@ -453,6 +464,11 @@ namespace EnergyBalanceSolver
                     var rslt = AttemptSolve(ctx.SetValues, ctx.ValuesLeft, vectorsLeft.FirstOrDefault(), vectorsLeft.Skip(1).ToList(), token);
                     if (rslt != null)
                         return rslt;
+
+                    if (report)
+                    {
+                        Interlocked.Add(ref ProgressBar.CompletedCount, ctx.KeyGroup.Solutions);
+                    }
 
                     continue;
                 }
@@ -496,6 +512,10 @@ namespace EnergyBalanceSolver
                                 Position = ctx.Position + 1
                             });
                         }
+                        else if (report)
+                        {
+                            Interlocked.Add(ref ProgressBar.CompletedCount, ctx.KeyGroup.Solutions);
+                        }
                     }
                 }
             }
@@ -505,9 +525,17 @@ namespace EnergyBalanceSolver
 
         private int?[] AttemptSolveOneSolutionGroup(int?[] setValues, List<int> valuesLeft, SumVector v, KeyValuePair<int, KeyDictionary> k, List<SumVector> vectorsLeft, CancellationToken token)
         {
+            bool topLevel = false;
             if (token.IsCancellationRequested)
                 return null;
 
+            if(setValues == null)
+            {
+                topLevel = true;
+                setValues = new int?[100];
+            }
+
+        
             var primarySetValues = setValues.ToArray();
             var primaryValuesLeft = valuesLeft.ToList();
 
@@ -519,7 +547,8 @@ namespace EnergyBalanceSolver
                     SetValues = primarySetValues,
                     ValuesLeft = primaryValuesLeft,
                     KeyGroup = k.Value,
-                    Position = 1
+                    Position = 1,
+                    TopLevel = topLevel,
                 }, v, vectorsLeft, token);
 
                 if (rslt != null)
@@ -544,7 +573,7 @@ namespace EnergyBalanceSolver
             //foreach(var k in v.SolutionDictionary.Values)
             {
                 var temp = AttemptSolveOneSolutionGroup(setValues, valuesLeft, v, k, vectorsLeft, token);
-                if (temp != null)
+                if (temp != null || token.IsCancellationRequested)
                 {
                     result = temp;
                     state.Break();
