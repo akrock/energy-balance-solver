@@ -225,25 +225,32 @@ namespace EnergyBalanceSolver
 
         private void Solve_Click(object sender, EventArgs e)
         {
-            //Hunt for the things we are trying to solve.
-            var vectors = GetVectors();
-            AvailableValues = new List<int>();
-
-            foreach(var tb in textBoxes)
+            try
             {
-                if (!string.IsNullOrWhiteSpace(tb.Text) && tb.BackColor != Color.LightGreen)
-                    AvailableValues.Add(int.Parse(tb.Text));
+                //Hunt for the things we are trying to solve.
+                var vectors = GetVectors();
+                AvailableValues = new List<int>();
+
+                foreach (var tb in textBoxes)
+                {
+                    if (!string.IsNullOrWhiteSpace(tb.Text) && tb.BackColor != Color.LightGreen)
+                        AvailableValues.Add(int.Parse(tb.Text));
+                }
+
+                Parallel.ForEach(vectors, (v) => v.AddSolutions(flatBoxes, AvailableValues, vectors.Where(x => x != v).ToList()));
+
+                ReduceSolutionsBySingles(vectors);
+                ReduceSolutionsByIntersections(vectors);
+
+                Parallel.ForEach(vectors, (v) => v.SetDictionary());
+
+                //Sort them by least solutions to most.
+                BruteForce(vectors);
             }
-            
-            Parallel.ForEach(vectors, (v) => v.AddSolutions(flatBoxes, AvailableValues, vectors.Where(x => x != v).ToList()));
-            
-            ReduceSolutionsBySingles(vectors);
-            ReduceSolutionsByIntersections(vectors);
-
-            Parallel.ForEach(vectors, (v) => v.SetDictionary());
-
-            //Sort them by least solutions to most.
-            BruteForce(vectors);
+            catch (Exception ex)
+            {
+                MessageBox.Show("An error happened, please make sure your inputs are valid numbers!.");
+            }
             
         }
 
