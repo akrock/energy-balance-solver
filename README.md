@@ -21,4 +21,4 @@ A compiled version is available in the releases link above, otherwise compile fr
 
 And a real-time demo of the solving!
 
-[[https://github.com/akrock/energy-balance-solver/blob/master/test-puzzle.gif|alt=test_solution]]
+![Test_Solution](https://github.com/akrock/energy-balance-solver/blob/master/test-puzzle.gif)
