@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Data;
 using System.Drawing;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -111,25 +112,34 @@ namespace EnergyBalanceSolver
 
         public class KeyDictionary
         {
-            public Dictionary<int, KeyDictionary> Values { get; } = new Dictionary<int, KeyDictionary>();
-            public int Solutions { get; private set; }
+            public ConcurrentDictionary<int, KeyDictionary> Values { get; } = new ConcurrentDictionary<int, KeyDictionary>();
+            public int Solutions { get { return _solutions; } }
 
+            private int _solutions = 0; 
             public void SetSolution(int[] s)
             {
                 var dict = this;
                 foreach(var i in s)
                 {
-                    if (!dict.Values.TryGetValue(i, out var kd))
-                        dict.Values[i] = kd = new KeyDictionary();
+                    dict = dict.Values.GetOrAdd(i, (x) =>
+                    {
+                        lock (Values)
+                        {
+                            return dict.Values.GetOrAdd(x, new KeyDictionary());
+                        }
+                    });
 
-                    kd.Solutions++;
-                    dict = kd;
+                    Interlocked.Increment(ref dict._solutions);
                 }
             }
+
+
         }
 
         private class SumVector
         {
+            private Guid Id = Guid.NewGuid();
+
             public List<TextBox> Boxes = new List<TextBox>();
             public List<int> BoxIndexes = new List<int>();
 
@@ -138,17 +148,64 @@ namespace EnergyBalanceSolver
             public List<int[]> PossibleSolutions = new List<int[]>();
             public int FinalSolutionsCount = 0;
 
-            public KeyDictionary SolutionDictionary = new KeyDictionary();
+            private KeyDictionary _SolutionDictionary = new KeyDictionary();
+            private Func<List<int>, KeyDictionary> _SolutionDictionaryPopulator = null;
+
+            public KeyDictionary GetSolutionDictionary(int?[] setValues, List<int> availableValues)
+            {
+                //We skipped this one because it was just too massive.
+                if(_SolutionDictionaryPopulator != null)
+                {
+                    var available = availableValues.ToList();
+                    foreach(var bi in BoxIndexes)
+                    {
+                        var v = setValues[bi];
+                        if (v.HasValue)
+                            available.Add(v.Value);
+                    }
+
+                    return _SolutionDictionaryPopulator(available);
+                }
+
+                return _SolutionDictionary;
+            }
+
 
             public void AddSolutions(List<TextBox> flat, List<int> values, List<SumVector> otherVectors)
             {
-                var combinations = GetCombination(new List<int>(), values, Boxes.Count);
-                var acceptedCombos = combinations.Where(x => x.Sum() == Sum).ToList().Select(x => x.OrderBy(z => z).ToArray()).Distinct(new SequenceEquality()).ToList();
-
                 var commonIntersections = BoxIndexes.Where(x => otherVectors.Any(z => z.BoxIndexes.Contains(x))).Select(x => BoxIndexes.IndexOf(x)).ToList();
-                
-                var total = new List<int[]>();
-                
+
+                if (Boxes.Count > 7)
+                {
+                    FinalSolutionsCount = int.MaxValue;
+                    _SolutionDictionaryPopulator = (valuesLeft) =>
+                    {
+                        var combinations = GetCombination(new List<int>(), valuesLeft, Boxes.Count).Where(x => x.Sum() == Sum).ToList();
+                        var acceptedCombos = combinations.Select(x => x.OrderBy(z => z).ToArray()).Distinct(new SequenceEquality()).ToList();
+                        combinations = null;
+
+                        //Create a new one for now...
+                        var kd = new KeyDictionary();
+                        if (acceptedCombos.Count > 0)
+                        {
+                            PopulateSolutionDictionary(commonIntersections, acceptedCombos, kd);
+                        }
+
+                        return kd;
+                    };
+                }
+                else
+                {
+                    var combinations = GetCombination(new List<int>(), values, Boxes.Count).Where(x => x.Sum() == Sum).ToList();
+                    var acceptedCombos = combinations.Select(x => x.OrderBy(z => z).ToArray()).Distinct(new SequenceEquality()).ToList();
+                    combinations = null;
+
+                    PopulateSolutionDictionary(commonIntersections, acceptedCombos, _SolutionDictionary);
+                }
+            }
+
+            private void PopulateSolutionDictionary(List<int> commonIntersections, List<int[]> acceptedCombos, KeyDictionary kd)
+            {
                 Parallel.ForEach(acceptedCombos, ac =>
                 {
                     var perms = Permutations(ac.ToArray()).Select(x => x.ToArray()).ToList().Distinct(new SequenceEquality()).ToList();
@@ -159,27 +216,14 @@ namespace EnergyBalanceSolver
                         Intersections = x.Where((z, i) => commonIntersections.Contains(i)).ToArray()
                     }).Distinct(new BalancePermutationsEqualityComparer()).Select(x => x.Base).ToList();
 
-                    lock (total)
-                    {
-                        total.AddRange(onlyIntersectionDiffs);
-                    }
+                    if(FinalSolutionsCount != int.MaxValue)
+                        FinalSolutionsCount += onlyIntersectionDiffs.Count;
+
+                    Parallel.ForEach(onlyIntersectionDiffs, i => kd.SetSolution(i));
                 });
-    
-                PossibleSolutions = total;
             }
-
-            public void SetDictionary()
-            {
-                foreach(var s in PossibleSolutions)
-                {
-                    SolutionDictionary.SetSolution(s);
-                }
-
-                FinalSolutionsCount = PossibleSolutions.Count;
-                PossibleSolutions = null;
-            }
-
-            static IEnumerable<List<int>> GetCombination(List<int> temp, List<int> list, int length)
+            
+            private static IEnumerable<List<int>> GetCombination(List<int> temp, List<int> list, int length)
             {
                 if (temp.Count == length)
                 {
@@ -249,33 +293,46 @@ namespace EnergyBalanceSolver
                 }
 
                 ProgressBar.UpdateLabel("Finding all possible solutions...");
-                await Task.Run(() => Parallel.ForEach(vectors, (v) => v.AddSolutions(flatBoxes, AvailableValues, vectors.Where(x => x != v).ToList())), userCts.Token);
+                await Task.Run(() => {
+                    
+                    ProgressBar.TotalSolutions = vectors.Count;
 
-                var boxes = vectors.First().BoxIndexes.Count;
-                //Skip trying to reduce on squares, it usually doesn't work.
-                if (!vectors.All(v => v.BoxIndexes.Count == boxes))
-                {
-                    ProgressBar.UpdateLabel("Reduce possible soltuions....");
-                    await Task.Run(() =>
+                    Parallel.ForEach(vectors, (v, state) =>
                     {
-                        int totalSolutions = 0;
-                        int afterReduce = 0;
-                        do
-                        {
-                            totalSolutions = vectors.Sum(x => x.PossibleSolutions.Count);
+                        if (userCts.Token.IsCancellationRequested)
+                            state.Break();
 
-                            ReduceSolutionsBySingles(vectors);
-                            ReduceSolutionsByIntersections(vectors);
+                        v.AddSolutions(flatBoxes, AvailableValues, vectors.Where(x => x != v).ToList());
+                        Interlocked.Increment(ref ProgressBar.CompletedCount);
+                    });
+                }, userCts.Token);
+                
+                //var boxes = vectors.First().BoxIndexes.Count;
+                ////Skip trying to reduce on squares, it usually doesn't work.
+                //if (!vectors.All(v => v.BoxIndexes.Count == boxes))
+                //{
+                //    ProgressBar.UpdateLabel("Reduce possible soltuions....");
+                //    await Task.Run(() =>
+                //    {
+                //        int totalSolutions = 0;
+                //        int afterReduce = 0;
+                //        do
+                //        {
+                //            totalSolutions = vectors.Sum(x => x.PossibleSolutions.Count);
 
-                            afterReduce = vectors.Sum(x => x.PossibleSolutions.Count);
-                            Console.WriteLine($"TotalSolutions: {totalSolutions} -> {afterReduce}");
-                        } while (totalSolutions != afterReduce);
-                    }, userCts.Token);
-                }
+                //            ReduceSolutionsBySingles(vectors);
+                //            ReduceSolutionsByIntersections(vectors);
+
+                //            afterReduce = vectors.Sum(x => x.PossibleSolutions.Count);
+                //            Console.WriteLine($"TotalSolutions: {totalSolutions} -> {afterReduce}");
+                //        } while (totalSolutions != afterReduce);
+                //    }, userCts.Token);
+                //}
 
                 ProgressBar.UpdateLabel("Preparing to solve.....");
-                await Task.Run(() => Parallel.ForEach(vectors, (v) => v.SetDictionary()), userCts.Token);
-
+                ProgressBar.TotalSolutions = 0;
+                ProgressBar.CompletedCount = 0;
+                
                 //Sort them by least solutions to most.
                 await BruteForce(vectors, userCts.Token);
             }
@@ -306,8 +363,6 @@ namespace EnergyBalanceSolver
 
         private async Task BruteForce(List<SumVector> vectors, CancellationToken userToken)
         {
-            var singles = AvailableValues.Where(x => AvailableValues.Count(z => z == x) == 1).ToList();
-
             var bag = new ConcurrentBag<int?[]>();
             var outerCts = CancellationTokenSource.CreateLinkedTokenSource(userToken);
             var blockingTasks = new BlockingCollection<Task>(20);
@@ -318,7 +373,7 @@ namespace EnergyBalanceSolver
             while (processingOrder.Count < vectors.Count)
             {
                 //remaining to add.
-                var toAdd = vectors.Where(v => !processingOrder.Contains(v)).OrderByDescending(x => consumedPositions.Count(z => x.BoxIndexes.Contains(z)))
+                var toAdd = vectors.Where(v => !processingOrder.Contains(v)).OrderByDescending(x => x.FinalSolutionsCount == int.MaxValue ? 0 :consumedPositions.Count(z => x.BoxIndexes.Contains(z)))
                     .ThenBy(x => x.FinalSolutionsCount)
                     .ThenBy(x => x.BoxIndexes[0]).FirstOrDefault();
 
@@ -327,8 +382,6 @@ namespace EnergyBalanceSolver
 
                 processingOrder.Add(toAdd);
             }
-            
-            //vectors = vectors.OrderBy(x => x.BoxIndexes[0]).ToList();
             
             var t = Task.Run(() => AttemptSolution(AvailableValues.ToList(), processingOrder, outerCts.Token));
             var solution = await t;
@@ -380,7 +433,9 @@ namespace EnergyBalanceSolver
             UpdateLabel($"Attempting solutions.");
             var totalSolutions = 0;
 
-            foreach(var s in v.SolutionDictionary.Values.OrderBy(x => x.Value.Solutions))
+            var solutionDictionary = v.GetSolutionDictionary(null, valuesLeft);
+
+            foreach(var s in solutionDictionary.Values.OrderBy(x => x.Value.Solutions))
             {
                 totalSolutions += s.Value.Solutions;
 
@@ -569,8 +624,9 @@ namespace EnergyBalanceSolver
                 return setValues;
 
             int?[] result = null;
-            Parallel.ForEach(v.SolutionDictionary.Values, (k,state) =>
-            //foreach(var k in v.SolutionDictionary.Values)
+            var solutionDictionary = v.GetSolutionDictionary(setValues, valuesLeft);
+
+            Parallel.ForEach(solutionDictionary.Values, (k,state) =>
             {
                 var temp = AttemptSolveOneSolutionGroup(setValues, valuesLeft, v, k, vectorsLeft, token);
                 if (temp != null || token.IsCancellationRequested)

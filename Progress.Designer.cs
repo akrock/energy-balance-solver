@@ -90,11 +90,11 @@
             // 
             // lblPercent
             // 
+            this.lblPercent.AutoSize = true;
             this.lblPercent.BackColor = System.Drawing.Color.Transparent;
-            this.lblPercent.FlatStyle = System.Windows.Forms.FlatStyle.Popup;
-            this.lblPercent.Location = new System.Drawing.Point(140, 63);
+            this.lblPercent.Location = new System.Drawing.Point(144, 70);
             this.lblPercent.Name = "lblPercent";
-            this.lblPercent.Size = new System.Drawing.Size(47, 30);
+            this.lblPercent.Size = new System.Drawing.Size(42, 13);
             this.lblPercent.TabIndex = 6;
             this.lblPercent.Text = "00.00%";
             this.lblPercent.TextAlign = System.Drawing.ContentAlignment.MiddleCenter;
