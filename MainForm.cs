@@ -430,15 +430,12 @@ namespace EnergyBalanceSolver
             var blockingTasks = new BlockingCollection<Task>(500);
             var tasks = new List<Task>();
 
-            UpdateLabel($"Attempting solutions.");
-            var totalSolutions = 0;
+            UpdateLabel($"Attempting solutions...");
 
             var solutionDictionary = v.GetSolutionDictionary(null, valuesLeft);
 
             foreach(var s in solutionDictionary.Values.OrderBy(x => x.Value.Solutions))
             {
-                totalSolutions += s.Value.Solutions;
-
                 tasks.Add(Task.Run(() =>
                 {
                     var result = AttemptSolveOneSolutionGroup(null, valuesLeft, v, s, vectors.Skip(1).ToList(), innerCts.Token);
@@ -449,10 +446,7 @@ namespace EnergyBalanceSolver
                     }
                 }, innerCts.Token));
             }
-
-            ProgressBar.TotalSolutions = totalSolutions;
-            UpdateLabel($"Attempting {totalSolutions} solutions.");
-
+            
             try
             {
                 await Task.WhenAll(tasks.ToArray());
@@ -501,9 +495,7 @@ namespace EnergyBalanceSolver
         {
             if (token.IsCancellationRequested)
                 return null;
-
-            var report = context.TopLevel;
-           
+            
             var stack = new Stack<EvalContext>();
             stack.Push(context);
 
@@ -519,12 +511,7 @@ namespace EnergyBalanceSolver
                     var rslt = AttemptSolve(ctx.SetValues, ctx.ValuesLeft, vectorsLeft.FirstOrDefault(), vectorsLeft.Skip(1).ToList(), token);
                     if (rslt != null)
                         return rslt;
-
-                    if (report)
-                    {
-                        Interlocked.Add(ref ProgressBar.CompletedCount, ctx.KeyGroup.Solutions);
-                    }
-
+                   
                     continue;
                 }
 
@@ -567,10 +554,6 @@ namespace EnergyBalanceSolver
                                 Position = ctx.Position + 1
                             });
                         }
-                        else if (report)
-                        {
-                            Interlocked.Add(ref ProgressBar.CompletedCount, ctx.KeyGroup.Solutions);
-                        }
                     }
                 }
             }
@@ -594,6 +577,8 @@ namespace EnergyBalanceSolver
             var primarySetValues = setValues.ToArray();
             var primaryValuesLeft = valuesLeft.ToList();
 
+            Interlocked.Add(ref ProgressBar.TotalSolutions, k.Value.Solutions);
+
             bool solutionWorks = EvaluateSolutionGroup(primarySetValues, primaryValuesLeft, v.BoxIndexes[0], k.Key);
             if (solutionWorks)
             {
@@ -609,6 +594,7 @@ namespace EnergyBalanceSolver
                 if (rslt != null)
                     return rslt;
 
+                Interlocked.Add(ref ProgressBar.CompletedCount, k.Value.Solutions);
                 Console.WriteLine($"[{v.Sum}]: Eliminated sg {k.Key} - {vectorsLeft.Count} vectors left.");
             }
             

@@ -17,26 +17,16 @@ namespace EnergyBalanceSolver
 
         private Stopwatch timer = new Stopwatch();
 
-        public int TotalSolutions { get
-            {
-                return totalSolutions;
-            }
-            set
-            {
-                totalSolutions = value;
-                progressBar1.BeginInvoke(new Action(() => progressBar1.Maximum = totalSolutions));
-            }
-        }
-
-        private int totalSolutions;
-        public int CompletedCount;
+        public long TotalSolutions;
+        
+        public long CompletedCount;
 
         public Progress(System.Threading.CancellationTokenSource userCts)
         {
             InitializeComponent();
             this.userCts = userCts;
         }
-
+        
         protected override void OnShown(EventArgs e)
         {
             base.OnShown(e);
@@ -56,10 +46,19 @@ namespace EnergyBalanceSolver
         private void timer1_Tick(object sender, EventArgs e)
         {
             lblElapsed.Text = timer.Elapsed.ToString("hh\\:mm\\:ss");
-            progressBar1.Value = CompletedCount;
-            if (totalSolutions > 0)
+           
+            if (TotalSolutions > 0)
             {
-                lblPercent.Text = $"{Math.Round((CompletedCount / (double)TotalSolutions) * 100, 2)}%";
+                var percent = (CompletedCount / (double)TotalSolutions) * 100;
+                if (percent <= 100) //skip this update if it seems out of whack...
+                {
+                    progressBar1.Value = (int)percent;
+                    lblPercent.Text = $"{Math.Round(percent, 2)}%";
+                }
+            } else
+            {
+                lblPercent.Text = "0%";
+                progressBar1.Value = 0;
             }
         }
     }
