@@ -5,6 +5,7 @@ using System.Data;
 using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -37,6 +38,13 @@ namespace EnergyBalanceSolver
 
             foreach (var t in textBoxes)
                 flatBoxes.Add(t);
+        }
+
+        protected override void OnLoad(EventArgs e)
+        {
+            base.OnLoad(e);
+            var version = Assembly.GetExecutingAssembly().GetName().Version;
+            this.Text += $" v{version.Major}.{version.Minor}";
         }
 
         private void TextBox_Click(object sender, EventArgs e)
