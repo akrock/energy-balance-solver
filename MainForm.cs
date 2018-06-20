@@ -60,11 +60,11 @@ namespace EnergyBalanceSolver
             }
         }
 
-        private List<int> AvailableValues = new List<int>();
+        private List<sbyte> AvailableValues = new List<sbyte>();
 
-        private class SequenceEquality : IEqualityComparer<int[]>
+        private class SequenceEquality : IEqualityComparer<sbyte[]>
         {
-            public bool Equals(int[] x, int[] y)
+            public bool Equals(sbyte[] x, sbyte[] y)
             {
                 if (x.Length != y.Length)
                     return false;
@@ -78,7 +78,7 @@ namespace EnergyBalanceSolver
                 return true;
             }
 
-            public int GetHashCode(int[] obj)
+            public int GetHashCode(sbyte[] obj)
             {
                 var hash = 2166136261;
                 const uint prime = 16777619;
@@ -97,8 +97,8 @@ namespace EnergyBalanceSolver
         
         public class BalancePermutations
         {
-            public int[] Base { get; set; }
-            public int[] Intersections { get; set; }
+            public sbyte[] Base { get; set; }
+            public sbyte[] Intersections { get; set; }
         }
 
         private class BalancePermutationsEqualityComparer : SequenceEquality, IEqualityComparer<BalancePermutations>
@@ -120,28 +120,103 @@ namespace EnergyBalanceSolver
 
         public class KeyDictionary
         {
-            public ConcurrentDictionary<int, KeyDictionary> Values { get; } = new ConcurrentDictionary<int, KeyDictionary>();
+            public byte IndexPos { get; }
+
+            public KeyDictionary(byte index)
+            {
+                IndexPos = index;
+            }
+
+            public ConcurrentDictionary<sbyte, KeyDictionary> Values { get; } = new ConcurrentDictionary<sbyte, KeyDictionary>();
             public int Solutions { get { return _solutions; } }
 
             private int _solutions = 0; 
-            public void SetSolution(int[] s)
+
+            public void SetSolution(sbyte[] s)
             {
                 var dict = this;
                 foreach(var i in s)
                 {
+                    Interlocked.Increment(ref dict._solutions);
+
                     dict = dict.Values.GetOrAdd(i, (x) =>
                     {
                         lock (Values)
                         {
-                            return dict.Values.GetOrAdd(x, new KeyDictionary());
+                            byte nextPos = (byte)(dict.IndexPos + 1);
+                            return dict.Values.GetOrAdd(x, new KeyDictionary(nextPos));
                         }
                     });
-
-                    Interlocked.Increment(ref dict._solutions);
                 }
             }
 
+            internal HashSet<sbyte> GetValuesAtIndex(int index)
+            {
+                if(index == IndexPos)
+                {
+                    return new HashSet<sbyte>(Values.Keys);
+                }
+                else if (index > IndexPos)
+                {
+                    var result = new HashSet<sbyte>();
+                    foreach(var s in Values)
+                    {
+                        result.UnionWith(s.Value.GetValuesAtIndex(index));
+                    }
 
+                    return result;
+                }
+
+                return new HashSet<sbyte>();
+            }
+
+            internal int RemoveSolutionsAtIndex(sbyte solution, int index)
+            {
+                if(index == IndexPos)
+                {
+                    if(Values.TryRemove(solution, out var removed))
+                    {
+                        _solutions -= removed.Solutions;
+                        return removed.Solutions;
+                    }
+                }
+                else if (index > IndexPos)
+                {
+                    var result = 0;
+                    var toRemove = new List<sbyte>();
+                    foreach(var s in Values)
+                    {
+                        var removed = s.Value.RemoveSolutionsAtIndex(solution, index);
+                        result += removed;
+                        if (removed > 0 && s.Value.Solutions == 0)
+                            toRemove.Add(s.Key);
+                    }
+
+                    //If we have no more solutions in this key remove it totally.
+                    foreach (var key in toRemove)
+                        Values.TryRemove(key, out var garbage);
+                    
+                    _solutions -= result;
+                    return result;
+                }
+
+                return 0;
+            }
+
+            internal bool AllSolutionsUse(sbyte s)
+            {
+                if (IndexPos == 0 && Values.ContainsKey(s))
+                {
+                    return Values.All(x => x.Key == s || x.Value.AllSolutionsUse(s));
+                }
+                else if( IndexPos > 0)
+                {
+                    //I did not start w/ the s value, but maybe one of my children has it.
+                    return Values.ContainsKey(s) || Values.Any(x => x.Value.AllSolutionsUse(s));
+                }
+                
+                return false;
+            }
         }
 
         private class SumVector
@@ -153,13 +228,14 @@ namespace EnergyBalanceSolver
 
             public int? Sum = null;
             
-            public List<int[]> PossibleSolutions = new List<int[]>();
-            public int FinalSolutionsCount = 0;
+            public int FinalSolutionsCount => SolutionsPopulated ? _SolutionDictionary.Solutions : int.MaxValue;
 
-            private KeyDictionary _SolutionDictionary = new KeyDictionary();
-            private Func<List<int>, CancellationToken, KeyDictionary> _SolutionDictionaryPopulator = null;
+            public bool SolutionsPopulated { get; private set; }
 
-            public KeyDictionary GetSolutionDictionary(int?[] setValues, List<int> availableValues, CancellationToken token)
+            private KeyDictionary _SolutionDictionary = new KeyDictionary(0);
+            private Func<List<sbyte>, CancellationToken, KeyDictionary> _SolutionDictionaryPopulator = null;
+
+            public KeyDictionary GetSolutionDictionary(sbyte?[] setValues, List<sbyte> availableValues, CancellationToken token)
             {
                 //We skipped this one because it was just too massive.
                 if(_SolutionDictionaryPopulator != null)
@@ -178,25 +254,39 @@ namespace EnergyBalanceSolver
                 return _SolutionDictionary;
             }
 
+            public HashSet<sbyte> GetValuesAtIndex(int index)
+            {
+                return _SolutionDictionary.GetValuesAtIndex(index);
+            }
 
-            public void AddSolutions(List<TextBox> flat, List<int> values, List<SumVector> otherVectors, CancellationToken cancellationToken)
+            public void RemoveSolutionsAtIndex(sbyte solution, int index)
+            {
+                var reduced = _SolutionDictionary.RemoveSolutionsAtIndex(solution, index);
+            }
+
+            public void AddSolutions(List<TextBox> flat, List<sbyte> values, List<SumVector> otherVectors, CancellationToken cancellationToken)
             {
                 var commonIntersections = BoxIndexes.Where(x => otherVectors.Any(z => z.BoxIndexes.Contains(x))).Select(x => BoxIndexes.IndexOf(x)).ToList();
 
-                if (Boxes.Count > 7)
+                var combinations = GetCombination(new List<sbyte>(), values, Boxes.Count).Where(x => x.Select(z => (int)z).Sum() == Sum).ToList();
+                var acceptedCombos = combinations.Select(x => x.OrderBy(z => z).ToArray()).Distinct(new SequenceEquality()).ToList();
+                combinations = null;
+
+                Console.WriteLine($"[{Sum}]: {acceptedCombos.Count} combos");
+
+                if (Boxes.Count > 7 && acceptedCombos.Count >= 5000)
                 {
-                    FinalSolutionsCount = int.MaxValue;
                     _SolutionDictionaryPopulator = (valuesLeft, token) =>
                     {
-                        var combinations = GetCombination(new List<int>(), valuesLeft, Boxes.Count).Where(x => x.Sum() == Sum).ToList();
-                        var acceptedCombos = combinations.Select(x => x.OrderBy(z => z).ToArray()).Distinct(new SequenceEquality()).ToList();
-                        combinations = null;
+                        var popCombos = GetCombination(new List<sbyte>(), valuesLeft, Boxes.Count).Where(x => x.Select(z => (int)z).Sum() == Sum).ToList();
+                        var popAcceptedCombos = popCombos.Select(x => x.OrderBy(z => z).ToArray()).Distinct(new SequenceEquality()).ToList();
+                        popCombos = null;
 
                         //Create a new one for now...
-                        var kd = new KeyDictionary();
-                        if (acceptedCombos.Count > 0)
+                        var kd = new KeyDictionary(0);
+                        if (popAcceptedCombos.Count > 0)
                         {
-                            PopulateSolutionDictionary(commonIntersections, acceptedCombos, kd, token);
+                            PopulateSolutionDictionary(commonIntersections, popAcceptedCombos, kd, token);
                         }
 
                         return kd;
@@ -204,15 +294,12 @@ namespace EnergyBalanceSolver
                 }
                 else
                 {
-                    var combinations = GetCombination(new List<int>(), values, Boxes.Count).Where(x => x.Sum() == Sum).ToList();
-                    var acceptedCombos = combinations.Select(x => x.OrderBy(z => z).ToArray()).Distinct(new SequenceEquality()).ToList();
-                    combinations = null;
-
                     PopulateSolutionDictionary(commonIntersections, acceptedCombos, _SolutionDictionary, cancellationToken);
+                    SolutionsPopulated = true;
                 }
             }
 
-            private void PopulateSolutionDictionary(List<int> commonIntersections, List<int[]> acceptedCombos, KeyDictionary kd, CancellationToken cancellationToken)
+            private void PopulateSolutionDictionary(List<int> commonIntersections, List<sbyte[]> acceptedCombos, KeyDictionary kd, CancellationToken cancellationToken)
             {
                 Parallel.ForEach(acceptedCombos, (ac, state) =>
                 {
@@ -229,10 +316,7 @@ namespace EnergyBalanceSolver
                             Base = x,
                             Intersections = x.Where((z, i) => commonIntersections.Contains(i)).ToArray()
                         }).Distinct(new BalancePermutationsEqualityComparer()).Select(x => x.Base).ToList();
-
-                        if (FinalSolutionsCount != int.MaxValue)
-                            FinalSolutionsCount += onlyIntersectionDiffs.Count;
-
+                        
                         Parallel.ForEach(onlyIntersectionDiffs, (i, innerState) =>
                         {
                             if (cancellationToken.IsCancellationRequested)
@@ -245,7 +329,7 @@ namespace EnergyBalanceSolver
                 });
             }
             
-            private static IEnumerable<List<int>> GetCombination(List<int> temp, List<int> list, int length)
+            private static IEnumerable<List<sbyte>> GetCombination(List<sbyte> temp, List<sbyte> list, int length)
             {
                 if (temp.Count == length)
                 {
@@ -262,6 +346,11 @@ namespace EnergyBalanceSolver
                             yield return y;
                     }
                 }
+            }
+
+            internal bool AllSolutionsUse(sbyte s)
+            {
+                return _SolutionDictionary.AllSolutionsUse(s);
             }
         }
 
@@ -298,6 +387,10 @@ namespace EnergyBalanceSolver
 
         private async void Solve_Click(object sender, EventArgs e)
         {
+            //Dis-allow while in progress.
+            if (ProgressBar != null)
+                return;
+
             var userCts = new CancellationTokenSource();
             ProgressBar = new Progress(userCts);
             ProgressBar.Show(this);
@@ -306,12 +399,12 @@ namespace EnergyBalanceSolver
                 //Hunt for the things we are trying to solve.
                 ProgressBar.UpdateLabel("Gathering user inputs.");
                 var vectors = GetVectors();
-                AvailableValues = new List<int>();
+                AvailableValues = new List<sbyte>();
 
                 foreach (var tb in textBoxes)
                 {
                     if (!string.IsNullOrWhiteSpace(tb.Text) && tb.BackColor != Color.LightGreen)
-                        AvailableValues.Add(int.Parse(tb.Text));
+                        AvailableValues.Add(sbyte.Parse(tb.Text));
                 }
 
                 ProgressBar.UpdateLabel("Finding all possible solutions...");
@@ -332,28 +425,28 @@ namespace EnergyBalanceSolver
                         }
                     });
                 }, userCts.Token);
-                
-                //var boxes = vectors.First().BoxIndexes.Count;
+
+                var boxes = vectors.First().BoxIndexes.Count;
                 ////Skip trying to reduce on squares, it usually doesn't work.
-                //if (!vectors.All(v => v.BoxIndexes.Count == boxes))
-                //{
-                //    ProgressBar.UpdateLabel("Reduce possible soltuions....");
-                //    await Task.Run(() =>
-                //    {
-                //        int totalSolutions = 0;
-                //        int afterReduce = 0;
-                //        do
-                //        {
-                //            totalSolutions = vectors.Sum(x => x.PossibleSolutions.Count);
+                if (!vectors.All(v => v.BoxIndexes.Count == boxes))
+                {
+                    ProgressBar.UpdateLabel("Reduce possible soltuions....");
+                    await Task.Run(() =>
+                    {
+                        int totalSolutions = 0;
+                        int afterReduce = 0;
+                        do
+                        {
+                            totalSolutions = vectors.Sum(x => x.SolutionsPopulated ? x.FinalSolutionsCount : 0);
 
-                //            ReduceSolutionsBySingles(vectors);
-                //            ReduceSolutionsByIntersections(vectors);
+                            ReduceSolutionsBySingles(vectors);
+                            ReduceSolutionsByIntersections(vectors);
 
-                //            afterReduce = vectors.Sum(x => x.PossibleSolutions.Count);
-                //            Console.WriteLine($"TotalSolutions: {totalSolutions} -> {afterReduce}");
-                //        } while (totalSolutions != afterReduce);
-                //    }, userCts.Token);
-                //}
+                            afterReduce = vectors.Sum(x => x.SolutionsPopulated ? x.FinalSolutionsCount : 0);
+                            Console.WriteLine($"TotalSolutions: {totalSolutions} -> {afterReduce}");
+                        } while (totalSolutions != afterReduce);
+                    }, userCts.Token);
+                }
 
                 ProgressBar.UpdateLabel("Preparing to solve.....");
                 ProgressBar.TotalSolutions = 0;
@@ -443,14 +536,14 @@ namespace EnergyBalanceSolver
             ProgressBar?.UpdateLabel(text);
         }
         
-        private async Task<int?[]> AttemptSolution(List<int> valuesLeft, List<SumVector> vectors, CancellationToken outerToken)
+        private async Task<sbyte?[]> AttemptSolution(List<sbyte> valuesLeft, List<SumVector> vectors, CancellationToken outerToken)
         {
             if (outerToken.IsCancellationRequested)
                 return null;
 
             var v = vectors.FirstOrDefault();
 
-            var bag = new ConcurrentBag<int?[]>();
+            var bag = new ConcurrentBag<sbyte?[]>();
             var innerCts = CancellationTokenSource.CreateLinkedTokenSource(outerToken);
 
             var blockingTasks = new BlockingCollection<Task>(500);
@@ -482,7 +575,7 @@ namespace EnergyBalanceSolver
             return bag.FirstOrDefault();
         }
         
-        private bool EvaluateSolutionGroup(int?[] setValues, List<int> valuesLeft, int matrixIndex, int value)
+        private bool EvaluateSolutionGroup(sbyte?[] setValues, List<sbyte> valuesLeft, int matrixIndex, sbyte value)
         {
             var setValue = setValues[matrixIndex];
             if (setValue.HasValue)
@@ -510,13 +603,13 @@ namespace EnergyBalanceSolver
         
         private class EvalContext
         {
-            public int?[] SetValues { get; set; }
-            public List<int> ValuesLeft { get; set; }
+            public sbyte?[] SetValues { get; set; }
+            public List<sbyte> ValuesLeft { get; set; }
             public KeyDictionary KeyGroup { get; set; }
             public int Position { get; set; }
         }
 
-        private int?[] EvalNextGroups(EvalContext context, SumVector v, List<SumVector> vectorsLeft, CancellationToken token)
+        private sbyte?[] EvalNextGroups(EvalContext context, SumVector v, List<SumVector> vectorsLeft, CancellationToken token)
         {
             if (token.IsCancellationRequested)
                 return null;
@@ -586,7 +679,7 @@ namespace EnergyBalanceSolver
             return null;
         }
 
-        private int?[] AttemptSolveOneSolutionGroup(int?[] setValues, List<int> valuesLeft, SumVector v, KeyValuePair<int, KeyDictionary> k, List<SumVector> vectorsLeft, CancellationToken token)
+        private sbyte?[] AttemptSolveOneSolutionGroup(sbyte?[] setValues, List<sbyte> valuesLeft, SumVector v, KeyValuePair<sbyte, KeyDictionary> k, List<SumVector> vectorsLeft, CancellationToken token)
         {
             bool topLevel = false;
             if (token.IsCancellationRequested)
@@ -595,7 +688,7 @@ namespace EnergyBalanceSolver
             if(setValues == null)
             {
                 topLevel = true;
-                setValues = new int?[100];
+                setValues = new sbyte?[100];
             }
 
         
@@ -625,7 +718,7 @@ namespace EnergyBalanceSolver
             return null;
         }
 
-        private int?[] AttemptSolve(int?[] setValues, List<int> valuesLeft, SumVector v, List<SumVector> vectorsLeft, CancellationToken token)
+        private sbyte?[] AttemptSolve(sbyte?[] setValues, List<sbyte> valuesLeft, SumVector v, List<SumVector> vectorsLeft, CancellationToken token)
         {
             if (token.IsCancellationRequested)
                 return null;
@@ -633,7 +726,7 @@ namespace EnergyBalanceSolver
             if (v == null)
                 return setValues;
 
-            int?[] result = null;
+            sbyte?[] result = null;
             var solutionDictionary = v.GetSolutionDictionary(setValues, valuesLeft, token);
 
             Parallel.ForEach(solutionDictionary.Values, (k,state) =>
@@ -649,37 +742,33 @@ namespace EnergyBalanceSolver
             return result;
         }
 
-        
+
         private void ReduceSolutionsBySingles(List<SumVector> vectors)
         {
             var singles = AvailableValues.Where(x => AvailableValues.Count(z => z == x) == 1).ToList();
 
             foreach (var s in singles)
             {
-                var alwaysUsed = vectors.Where(x => x.PossibleSolutions.All(sol => sol.Contains(s))).FirstOrDefault();
-                if (alwaysUsed != null)
+                var alwaysUsed = vectors.Where(x => x.AllSolutionsUse(s)).OrderBy(x => x.FinalSolutionsCount).ToList();
+                if(alwaysUsed.Any())
                 {
+                    var acceptibleBoxes = alwaysUsed.SelectMany(x => x.Boxes).ToList();
                     foreach (var v in vectors)
                     {
-                        if (v == alwaysUsed)
+                        if (!alwaysUsed.Contains(v)|| !v.SolutionsPopulated)
                             continue;
+                        
+                        var boxIntersections = v.Boxes.Select(b => acceptibleBoxes.IndexOf(b)).ToList();
 
-                        var boxIntersections = v.Boxes.Select(b => alwaysUsed.Boxes.IndexOf(b)).ToList();
-
-                        var okSolutions = v.PossibleSolutions.Where(x =>
-                       {
-                           for (int i = 0; i < boxIntersections.Count; i++)
-                           {
-                               if (x.ElementAt(i) == s && (boxIntersections[i] == -1 || alwaysUsed.PossibleSolutions.All(z => z.ElementAt(boxIntersections[i]) != s)))
-                                   return false;
-                           }
-
-                           return true;
-                       }).ToList();
-
-                        v.PossibleSolutions = okSolutions;
+                        if (alwaysUsed.Count == 1 || boxIntersections.All(x => x == -1))
+                        {
+                            for (int i = 0; i < boxIntersections.Count; i++)
+                            {
+                                if (boxIntersections[i] == -1)
+                                    v.RemoveSolutionsAtIndex(s, i);
+                            }
+                        }
                     }
-
                 }
             }
         }
@@ -688,36 +777,62 @@ namespace EnergyBalanceSolver
         {
 
             //Sort them by least solutions to most.
-            vectors = vectors.OrderBy(x => x.PossibleSolutions.Count).ToList();
-
+           // vectors = vectors.OrderBy(x => x.PossibleSolutions.Count).ToList();
+           
             for(var j =0; j < vectors.Count; j++)
             {
                 var v = vectors[j];
-                var stillOkSolutions = new ConcurrentBag<int[]>();
+                if (!v.SolutionsPopulated)
+                    continue;
 
+                
                 //find intersects
-                var boxIntersections = v.Boxes.Select(b => vectors.Where(x => x != v && x.Boxes.IndexOf(b) > -1).Select(x => new { Vector = x, Index = x.Boxes.IndexOf(b) }).ToList()).ToList();
+                var boxIntersections = v.Boxes.Select(b => vectors.Where(x => x != v && x.SolutionsPopulated && x.Boxes.IndexOf(b) > -1).Select(x => new { Vector = x, Index = x.Boxes.IndexOf(b) }).ToList()).ToList();
 
-                Parallel.ForEach(v.PossibleSolutions, s =>
+                for(var i = 0; i < boxIntersections.Count; i++)
                 {
-                    var solutonOk = true;
-                    for (int i = 0; i < v.Boxes.Count; i++)
+                    var intersection = boxIntersections[i];
+                    if (intersection.Any())
                     {
-                        var bi = boxIntersections[i];
-                        var value = s[i];
-
-                        if (!bi.All(x => x.Vector.PossibleSolutions.Any(z => z[x.Index] == value)))
+                        var possibleValues = v.GetValuesAtIndex(i);
+                        //Think there should always only be one here?
+                        foreach(var otherV in intersection)
                         {
-                            solutonOk = false;
-                            break;
+                            var values = otherV.Vector.GetValuesAtIndex(otherV.Index);
+                            
+                            foreach(var toRemove in possibleValues.Where(val => !values.Contains(val)))
+                            {
+                                v.RemoveSolutionsAtIndex(toRemove, i);
+                            }
                         }
+
+                        
                     }
+                }
+                
 
-                    if (solutonOk)
-                        stillOkSolutions.Add(s);
-                });
 
-                v.PossibleSolutions = stillOkSolutions.ToList();
+
+                //Parallel.ForEach(v.PossibleSolutions, s =>
+                //{
+                //    var solutonOk = true;
+                //    for (int i = 0; i < v.Boxes.Count; i++)
+                //    {
+                //        var bi = boxIntersections[i];
+                //        var value = s[i];
+
+                //        if (!bi.All(x => x.Vector.PossibleSolutions.Any(z => z[x.Index] == value)))
+                //        {
+                //            solutonOk = false;
+                //            break;
+                //        }
+                //    }
+
+                //    if (solutonOk)
+                //        stillOkSolutions.Add(s);
+                //});
+
+                //v.PossibleSolutions = stillOkSolutions.ToList();
             }
         }
 
@@ -746,7 +861,7 @@ namespace EnergyBalanceSolver
                             if (!text.Contains("U") && !text.Contains("D"))
                             {
                                 text = text.Replace("L", string.Empty).Replace("R", string.Empty);
-                                rowBoxes.Sum = int.Parse(text);
+                                rowBoxes.Sum = sbyte.Parse(text);
                             }else
                             {
                                 //this one isn't for us.
@@ -786,7 +901,7 @@ namespace EnergyBalanceSolver
                             if (!text.Contains("L") && !text.Contains("R"))
                             {
                                 text = text.Replace("U", string.Empty).Replace("D", string.Empty);
-                                colBoxes.Sum = int.Parse(text);
+                                colBoxes.Sum = sbyte.Parse(text);
                             }
                             else
                             {
@@ -841,6 +956,10 @@ namespace EnergyBalanceSolver
 
         private void btnReset_Click(object sender, EventArgs e)
         {
+            //Dis-allow while in progress.
+            if (ProgressBar != null)
+                return;
+
             ClearTextBoxes(true);
         }
     }
