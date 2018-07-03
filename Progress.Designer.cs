@@ -36,6 +36,8 @@
             this.lblElapsed = new System.Windows.Forms.Label();
             this.label1 = new System.Windows.Forms.Label();
             this.lblPercent = new System.Windows.Forms.Label();
+            this.label2 = new System.Windows.Forms.Label();
+            this.lblDifficulty = new System.Windows.Forms.Label();
             this.SuspendLayout();
             // 
             // lblStep
@@ -73,7 +75,7 @@
             // lblElapsed
             // 
             this.lblElapsed.AutoSize = true;
-            this.lblElapsed.Location = new System.Drawing.Point(140, 42);
+            this.lblElapsed.Location = new System.Drawing.Point(269, 42);
             this.lblElapsed.Name = "lblElapsed";
             this.lblElapsed.Size = new System.Drawing.Size(49, 13);
             this.lblElapsed.TabIndex = 4;
@@ -82,7 +84,7 @@
             // label1
             // 
             this.label1.AutoSize = true;
-            this.label1.Location = new System.Drawing.Point(88, 42);
+            this.label1.Location = new System.Drawing.Point(217, 42);
             this.label1.Name = "label1";
             this.label1.Size = new System.Drawing.Size(46, 13);
             this.label1.TabIndex = 5;
@@ -99,12 +101,32 @@
             this.lblPercent.Text = "00.00%";
             this.lblPercent.TextAlign = System.Drawing.ContentAlignment.MiddleCenter;
             // 
+            // label2
+            // 
+            this.label2.AutoSize = true;
+            this.label2.Location = new System.Drawing.Point(13, 42);
+            this.label2.Name = "label2";
+            this.label2.Size = new System.Drawing.Size(47, 13);
+            this.label2.TabIndex = 7;
+            this.label2.Text = "Difficulty";
+            // 
+            // lblDifficulty
+            // 
+            this.lblDifficulty.AutoSize = true;
+            this.lblDifficulty.Location = new System.Drawing.Point(67, 42);
+            this.lblDifficulty.Name = "lblDifficulty";
+            this.lblDifficulty.Size = new System.Drawing.Size(59, 13);
+            this.lblDifficulty.TabIndex = 8;
+            this.lblDifficulty.Text = "Calculating";
+            // 
             // Progress
             // 
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
             this.ClientSize = new System.Drawing.Size(339, 129);
             this.ControlBox = false;
+            this.Controls.Add(this.lblDifficulty);
+            this.Controls.Add(this.label2);
             this.Controls.Add(this.lblPercent);
             this.Controls.Add(this.label1);
             this.Controls.Add(this.lblElapsed);
@@ -130,5 +152,7 @@
         private System.Windows.Forms.Label lblElapsed;
         private System.Windows.Forms.Label label1;
         private System.Windows.Forms.Label lblPercent;
+        private System.Windows.Forms.Label label2;
+        private System.Windows.Forms.Label lblDifficulty;
     }
 }

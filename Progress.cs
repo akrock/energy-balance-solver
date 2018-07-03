@@ -17,9 +17,9 @@ namespace EnergyBalanceSolver
 
         private Stopwatch timer = new Stopwatch();
 
-        public long TotalSolutions;
+        public double TotalSolutions;
         
-        public long CompletedCount;
+        public double CompletedCount;
 
         public Progress(System.Threading.CancellationTokenSource userCts)
         {
@@ -49,7 +49,7 @@ namespace EnergyBalanceSolver
            
             if (TotalSolutions > 0)
             {
-                var percent = (CompletedCount / (double)TotalSolutions) * 100;
+                var percent = (CompletedCount / TotalSolutions) * 100;
                 if (percent <= 100) //skip this update if it seems out of whack...
                 {
                     progressBar1.Value = (int)percent;
@@ -61,5 +61,62 @@ namespace EnergyBalanceSolver
                 progressBar1.Value = 0;
             }
         }
+
+        const int EasyThreshold = 125_000_000;
+        const int MediumThreshold = 250_000_000;
+        const int HardThreshold = 325_000_000;
+        const int HarderThreshold = 400_000_000;
+        const int ImpossibleThreshold = 500_000_000;
+
+        internal void SetDificulty(int v)
+        {
+            //Rudimentary difficulty levels
+            // 0 -> 125M - Easy
+            // 125 -> 250M - Medium
+            // 250 -> 325M - Hard
+            // 325 -> 400M - Harder
+            //> 500M - Impossible
+
+            lblDifficulty.BeginInvoke(new Action(() =>
+            {
+                if(v == -1)
+                {
+                    lblDifficulty.Text = "Calculating";
+                    lblDifficulty.ForeColor = Color.Black;
+                }
+                else if( v >= MediumThreshold )
+                {
+                    lblDifficulty.ForeColor = Color.DarkRed;
+                    if (v >= ImpossibleThreshold)
+                    {
+                        lblDifficulty.Text = "Insane";
+                    }
+                    else if(v >= HarderThreshold)
+                    {
+                        lblDifficulty.Text = "Even Harder";
+                    }
+                    else if(v >= HardThreshold)
+                    {
+                        lblDifficulty.Text = "Harder";
+                    }
+                    else
+                    {
+                        lblDifficulty.Text = "Hard";
+                    }
+                } else
+                {
+                    lblDifficulty.ForeColor = Color.DarkGreen;
+                    if(v >= EasyThreshold)
+                    {
+                        lblDifficulty.Text = "Medium";
+                    }
+                    else
+                    {
+                        lblDifficulty.Text = "Easy";
+                    }
+                }
+            }));
+        }
+        
     }
 }
