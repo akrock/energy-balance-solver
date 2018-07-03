@@ -20,8 +20,8 @@ namespace EnergyBalanceSolver
         public MainForm()
         {
             InitializeComponent();
-
-            foreach(var c in tableLayoutPanel1.Controls)
+            
+            foreach (var c in tableLayoutPanel1.Controls)
             {
                 var textBox = c as TextBox;
                 if (textBox == null)
@@ -354,7 +354,7 @@ namespace EnergyBalanceSolver
 
                 Console.WriteLine($"[{Sum}]: {acceptedCombos.Count} combos");
 
-                if (Boxes.Count > 7 && acceptedCombos.Count >= 2500)
+                if (Boxes.Count > 7 && acceptedCombos.Count >= 5000)
                 {
                     _SolutionDictionaryPopulator = (valuesLeft, token) =>
                     {
@@ -394,14 +394,8 @@ namespace EnergyBalanceSolver
                     }
                     else
                     {
-                        var perms = Permutations(ac.ToArray()).Select(x => x.ToArray()).ToList().Distinct(new SequenceEquality()).ToList();
-
-                        var onlyIntersectionDiffs = perms.Select(x => new BalancePermutations
-                        {
-                            Base = x,
-                            Intersections = x.Where((z, i) => commonIntersections.Contains(i)).ToArray()
-                        }).Distinct(new BalancePermutationsEqualityComparer()).Select(x => x.Base).ToList();
-                        
+                        var onlyIntersectionDiffs = IntersectionPermuatations(ac.ToArray(), commonIntersections.ToArray());
+ 
                         Parallel.ForEach(onlyIntersectionDiffs, (i, innerState) =>
                         {
                             if (cancellationToken.IsCancellationRequested)
@@ -426,12 +420,79 @@ namespace EnergyBalanceSolver
                 {
                     while (list.Any())
                     {
-
                         var value = list.Take(1);
                         list = list.Skip(1).ToList();
                         foreach (var y in GetCombination(temp.Concat(value).ToList(), list, length))
                             yield return y;
                     }
+                }
+            }
+
+            private static IEnumerable<sbyte[]> IntersectionPermuatations(sbyte[] values, int[] intersections)
+            {
+                var valuesInOrder = values.OrderBy(x => x).ToList();
+
+                var returnArray = new sbyte[values.Length];
+
+                foreach (var combo in SumVector.GetCombination(new List<sbyte>(), valuesInOrder, intersections.Length))
+                {
+                    var valuesForPerm = valuesInOrder.ToList();
+
+                    foreach (var c in combo)
+                        valuesForPerm.Remove(c);
+
+                    foreach (var comboPerm in Permutations(combo.ToArray(), 0))
+                    {
+                        var intersectionCounter = 0;
+                        var nextIntersection = intersections[intersectionCounter];
+                        var valueSelector = 0;
+                        for (var i = 0; i < values.Length; i++)
+                        {
+                            sbyte value;
+                            if (i == nextIntersection)
+                            {
+                                value = comboPerm[intersectionCounter++];
+                                nextIntersection = intersectionCounter < intersections.Length ? intersections[intersectionCounter] : -1;
+                            }
+                            else
+                            {
+                                value = valuesForPerm[valueSelector++];
+                            }
+
+                            returnArray[i] = value;
+                        }
+
+                        yield return returnArray.ToArray();
+                    }
+                }
+            }
+
+            private static IEnumerable<T[]> Permutations<T>(T[] values, int fromInd = 0)
+            {
+                if (fromInd + 1 == values.Length)
+                    yield return values;
+                else
+                {
+                    foreach (var v in Permutations(values, fromInd + 1))
+                        yield return v;
+
+                    for (var i = fromInd + 1; i < values.Length; i++)
+                    {
+                        SwapValues(values, fromInd, i);
+                        foreach (var v in Permutations(values, fromInd + 1))
+                            yield return v;
+                        SwapValues(values, fromInd, i);
+                    }
+                }
+            }
+
+            private static void SwapValues<T>(T[] values, int pos1, int pos2)
+            {
+                if (pos1 != pos2)
+                {
+                    T tmp = values[pos1];
+                    values[pos1] = values[pos2];
+                    values[pos2] = tmp;
                 }
             }
 
@@ -458,36 +519,7 @@ namespace EnergyBalanceSolver
                 }
             }
         }
-
-        public static IEnumerable<T[]> Permutations<T>(T[] values, int fromInd = 0)
-        {
-            if (fromInd + 1 == values.Length)
-                yield return values;
-            else
-            {
-                foreach (var v in Permutations(values, fromInd + 1))
-                    yield return v;
-
-                for (var i = fromInd + 1; i < values.Length; i++)
-                {
-                    SwapValues(values, fromInd, i);
-                    foreach (var v in Permutations(values, fromInd + 1))
-                        yield return v;
-                    SwapValues(values, fromInd, i);
-                }
-            }
-        }
-
-        private static void SwapValues<T>(T[] values, int pos1, int pos2)
-        {
-            if (pos1 != pos2)
-            {
-                T tmp = values[pos1];
-                values[pos1] = values[pos2];
-                values[pos2] = tmp;
-            }
-        }
-
+        
         private Progress ProgressBar;
 
         private async void Solve_Click(object sender, EventArgs e)
@@ -511,6 +543,12 @@ namespace EnergyBalanceSolver
                     if (!string.IsNullOrWhiteSpace(tb.Text) && tb.BackColor != Color.LightGreen)
                         AvailableValues.Add(sbyte.Parse(tb.Text));
                 }
+
+                if(!vectors.All(v => v.Boxes.Count > 0))
+                {
+                    throw new Exception();
+                }
+
 
                 ProgressBar.UpdateLabel("Finding all possible solutions...");
                 await Task.Run(() =>
@@ -564,8 +602,11 @@ namespace EnergyBalanceSolver
             }
             catch (Exception ex)
             {
-                userCts.Cancel();
-                MessageBox.Show("An error happened, please make sure your inputs are valid numbers!.");
+                if (!(ex is TaskCanceledException))
+                {
+                    userCts.Cancel();
+                    MessageBox.Show("An error happened, please make sure your inputs are valid numbers!.");
+                }
             }
             finally
             {
@@ -640,8 +681,8 @@ namespace EnergyBalanceSolver
 
             ProgressBar.TotalSolutions = totalPossibleSolutions;
 
-            var t = Task.Run(() => AttemptSolution(AvailableValues.ToList(), primaryProcessingOrder, outerCts.Token));
-            var t2 = Task.Run(() => AttemptSolution(AvailableValues.ToList(), secondaryProcessingOrder, outerCts.Token));
+            var t = Task.Run(() => AttemptSolution(AvailableValues.ToList(), primaryProcessingOrder, outerCts));
+            var t2 = Task.Run(() => AttemptSolution(AvailableValues.ToList(), secondaryProcessingOrder, outerCts));
             var primarySolution = await t;
             var secondarySolution = await t2;
 
@@ -679,34 +720,33 @@ namespace EnergyBalanceSolver
             ProgressBar?.UpdateLabel(text);
         }
         
-        private async Task<sbyte?[]> AttemptSolution(List<sbyte> valuesLeft, List<SumVector> vectors, CancellationToken outerToken)
+        private async Task<sbyte?[]> AttemptSolution(List<sbyte> valuesLeft, List<SumVector> vectors, CancellationTokenSource cts)
         {
-            if (outerToken.IsCancellationRequested)
+            if (cts.Token.IsCancellationRequested)
                 return null;
 
             var v = vectors.FirstOrDefault();
             
             var bag = new ConcurrentBag<sbyte?[]>();
-            var innerCts = CancellationTokenSource.CreateLinkedTokenSource(outerToken);
-
+           
             var blockingTasks = new BlockingCollection<Task>(500);
             var tasks = new List<Task>();
 
             UpdateLabel($"Attempting solutions...");
 
-            var solutionDictionary = v.GetSolutionDictionary(null, valuesLeft, innerCts.Token);
+            var solutionDictionary = v.GetSolutionDictionary(null, valuesLeft, cts.Token);
 
             foreach(var s in solutionDictionary.Values.OrderBy(x => x.Value.Solutions))
             {
                 tasks.Add(Task.Run(() =>
                 {
-                    var result = AttemptSolveOneSolutionGroup(null, valuesLeft, v, s, vectors.Skip(1).ToList(), innerCts.Token);
+                    var result = AttemptSolveOneSolutionGroup(null, valuesLeft, v, s, vectors.Skip(1).ToList(), cts.Token);
                     if (result != null)
                     {
                         bag.Add(result);
-                        innerCts.Cancel();
+                        cts.Cancel();
                     }
-                }, innerCts.Token));
+                }, cts.Token));
             }
             
             try
@@ -904,7 +944,7 @@ namespace EnergyBalanceSolver
             sbyte?[] result = null;
             //for state we really only care about the view
             //of the board for this vector & the remaining ones.
-            var boxesToTrack = vectorsLeft.SelectMany(x => x.BoxIndexes).Distinct().ToList();
+            var boxesToTrack = vectorsLeft.Concat(new[] { v }).SelectMany(x => x.BoxIndexes).Distinct().ToList();
             var trackState = setValues.Where((x, i) => x.HasValue && boxesToTrack.Contains(i)).Select(x => x.Value).ToArray();
 
             if (v.TrackState(trackState, valuesLeft))
