@@ -346,8 +346,8 @@ namespace EnergyBalanceSolver
 
             public void AddSolutions(List<TextBox> flat, List<sbyte> values, List<SumVector> otherVectors, CancellationToken cancellationToken)
             {
-                var commonIntersections = BoxIndexes.Where(x => otherVectors.Any(z => z.BoxIndexes.Contains(x))).Select(x => BoxIndexes.IndexOf(x)).ToList();
-
+                var commonIntersections = BoxIndexes.Where(x => otherVectors.Any(z => z.BoxIndexes.Contains(x))).Select(x => BoxIndexes.IndexOf(x)).ToList(); 
+                
                 var combinations = GetCombination(new List<sbyte>(), values, Boxes.Count).Where(x => x.Select(z => (int)z).Sum() == Sum).ToList();
                 var acceptedCombos = combinations.Select(x => x.OrderBy(z => z).ToArray()).Distinct(new SequenceEquality()).ToList();
                 combinations = null;
@@ -430,10 +430,17 @@ namespace EnergyBalanceSolver
 
             private static IEnumerable<sbyte[]> IntersectionPermuatations(sbyte[] values, int[] intersections)
             {
+                if (intersections.Length == 0)
+                {
+                    //Add special case handling if we have no intersections,
+                    //just return the single value.
+                    yield return values;
+                    yield break;
+                }
+              
                 var valuesInOrder = values.OrderBy(x => x).ToList();
-
                 var returnArray = new sbyte[values.Length];
-
+                
                 foreach (var combo in SumVector.GetCombination(new List<sbyte>(), valuesInOrder, intersections.Length))
                 {
                     var valuesForPerm = valuesInOrder.ToList();
